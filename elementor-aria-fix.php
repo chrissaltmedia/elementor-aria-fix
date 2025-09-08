@@ -3,20 +3,17 @@
  * Plugin Name: Elementor Loop Grid & Swiper ARIA Fix
  * Description: Normalises ARIA roles for Elementor Loop Grids and Swiper carousels to satisfy Lighthouse/axe “required children” checks. Front end only.
  * Author: Salt Media LTD - Christopher Sheppard
- * Version: 1.0.0
+ * Version: 1.0.1
  * License: GPL-2.0+
  */
 
 if ( ! defined( 'ABSPATH' ) ) exit;
 
-add_action('wp_enqueue_scripts', function () {
+// Print a single inline script in the footer; no dummy <script src=""> tags.
+add_action('wp_footer', function () {
+	if ( is_admin() || wp_doing_ajax() ) return;
 
-    if ( is_admin() ) return;
-
-    // Footer script, no external file, tiny + self-contained
-    wp_register_script('sm-elementor-aria-fix', '', [], '1.0.0', true);
-
-    $js = <<<'JS'
+	$js = <<<'JS'
 (function () {
   const ready = (fn) => {
     if (document.readyState === 'loading') {
@@ -56,22 +53,13 @@ add_action('wp_enqueue_scripts', function () {
   function normalisePlainLoopGrid(container) {
     container.setAttribute('role', 'list');
     container.removeAttribute('aria-roledescription');
-
     const items = Array.from(container.children).filter((el) => el.nodeType === 1);
-    items.forEach((item) => {
-      item.setAttribute('role', 'listitem');
-    });
+    items.forEach((item) => item.setAttribute('role', 'listitem'));
   }
 
   function fixAll(root = document) {
-    root.querySelectorAll('div.swiper.elementor-loop-container.elementor-grid').forEach((carousel) => {
-      labelSlidesAsListitems(carousel);
-    });
-
-    root.querySelectorAll('div.elementor-loop-container.elementor-grid:not(.swiper)').forEach((container) => {
-      normalisePlainLoopGrid(container);
-    });
-
+    root.querySelectorAll('div.swiper.elementor-loop-container.elementor-grid').forEach(labelSlidesAsListitems);
+    root.querySelectorAll('div.elementor-loop-container.elementor-grid:not(.swiper)').forEach(normalisePlainLoopGrid);
     normaliseLiveRegion(root);
   }
 
@@ -91,26 +79,28 @@ add_action('wp_enqueue_scripts', function () {
     } catch (e) {}
   }, { once: true });
 
-  // Catch dynamic DOM changes (AJAX filters, lazy init, etc.)
+  // MutationObserver for dynamic changes (AJAX filters, lazy init). Keep it lightweight.
   try {
+    let scheduled = false;
+    const scheduleFix = () => {
+      if (scheduled) return;
+      scheduled = true;
+      requestAnimationFrame(() => { scheduled = false; fixAll(document); });
+    };
     const mo = new MutationObserver((muts) => {
       for (const m of muts) {
-        if (m.addedNodes && m.addedNodes.length) {
-          m.addedNodes.forEach((n) => {
-            if (n.nodeType === 1) fixAll(n);
-          });
-        }
-        if (m.type === 'attributes' && (m.attributeName === 'class' || m.attributeName === 'aria-live' || m.attributeName === 'role')) {
-          fixAll(document);
-        }
+        if (m.addedNodes && m.addedNodes.length) { scheduleFix(); break; }
       }
     });
-    mo.observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ['class', 'role', 'aria-live'] });
+    mo.observe(document.documentElement, { childList: true, subtree: true });
   } catch (e) {}
 })();
 JS;
 
-    wp_add_inline_script('sm-elementor-aria-fix', $js);
-    wp_enqueue_script('sm-elementor-aria-fix');
-
-}, 20);
+	// Print safely (WP 6.3+). If you're on older WP, echo the <script> tag instead.
+	if ( function_exists('wp_print_inline_script_tag') ) {
+		wp_print_inline_script_tag( $js );
+	} else {
+		echo "<script>{$js}</script>";
+	}
+}, 100);
